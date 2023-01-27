@@ -19,6 +19,19 @@ impl Clone for Channels {
     }
 }
 
+pub enum AudioContainer {
+    Opus = 0,
+    Flac = 1,
+}
+impl Clone for AudioContainer {
+    fn clone(&self) -> Self {
+        match self {
+            AudioContainer::Opus => AudioContainer::Opus,
+            AudioContainer::Flac => AudioContainer::Flac,
+        }
+    }
+}
+
 pub struct Track {
     pub channels: Channels,
 }
@@ -35,21 +48,24 @@ pub struct PackedTrack {
     pub data: Vec<Vec<u8>>,
 }
 
-pub struct RopusReader {
-    pub version: i32,
+pub struct PrawReader {
+    header: Vec<u8>,
 
+    pub version: i32,
     pub samplerate: i32,
+
     pub tracks_num: i32,
     pub tracks: Vec<Track>,
+    pub audio_container: AudioContainer,
 
     pub packs_num: i32,
-    pack_seek: Vec<i32>,
 
-    current_pack: i32,
+    pub current_pack: i32,
 }
 
-impl RopusReader {
-    pub fn load(buf: Vec<u8>) -> Result<RopusReader> {
+impl PrawReader {
+    pub fn load(buf: Vec<u8>) -> Result<PrawReader> {
+        let header_copy = buf.clone();
         let mut pointer = 0;
 
         // Get version as int
@@ -73,7 +89,7 @@ impl RopusReader {
         // Get tracks channel (0 = mono, 1 = stereo) as Vec<Track>. Note that each u8 is a track indicating a channel (0 for mono, 1 for stereo)
         let mut tracks = Vec::new();
         for _ in 0..tracks_num {
-            let mut track = buf[0];
+            let mut track = buf[pointer];
             pointer += 1;
             let track = Track {
                 channels: match track {
@@ -85,28 +101,30 @@ impl RopusReader {
             tracks.push(track);
         }
 
+        // Get audio container
+        let old_p = pointer;
+        pointer += 1;
+        let num = &buf[old_p..pointer];
+        let audio_container = match num[0] {
+            0 => AudioContainer::Opus,
+            1 => AudioContainer::Flac,
+            _ => panic!("Invalid audio container"),
+        };
+
         // Get packs_num
         let old_p = pointer;
         pointer += 4;
         let num = &buf[old_p..pointer];
         let packs_num = i32::from_be_bytes([num[0], num[1], num[2], num[3]]);
 
-        // Get pack_seek
-        let mut pack_seek = Vec::new();
-        for _ in 0..packs_num {
-            let old_p = pointer;
-            pointer += 4;
-            let pack = i32::from_be_bytes([num[0], num[1], num[2], num[3]]);
-            pack_seek.push(pack);
-        }
-
-        Ok(RopusReader {
+        Ok(PrawReader {
+            header: header_copy,
             version,
             samplerate,
             tracks_num,
             tracks,
+            audio_container,
             packs_num,
-            pack_seek,
             current_pack: 0,
         })
     }
@@ -116,7 +134,7 @@ impl RopusReader {
         let mut track_packets: Vec<Vec<Vec<u8>>> = vec![Vec::new(); self.tracks_num as usize];
         let mut pointer = 0;
 
-        while buf.len() > 0 {
+        while buf.len() != pointer {
             // Get the size of each track
             let mut track_sizes = Vec::new();
             for _ in 0..self.tracks_num {
@@ -134,7 +152,7 @@ impl RopusReader {
                 let old_p = pointer;
                 pointer += size;
 
-                let mut data = buf[old_p..pointer].to_vec();
+                let data = buf[old_p..pointer].to_vec();
                 track_packets[i].push(data);
             }
         }
@@ -150,21 +168,27 @@ impl RopusReader {
 
         packed_tracks
     }
+
+    pub fn get_header(&self) -> Vec<u8> {
+        self.header.clone()
+    }
 }
 
-pub struct RopusWriter {
+pub struct PrawWriter {
     pub version: i32,
 
     pub samplerate: i32,
+
     pub tracks_num: i32,
     pub tracks: Vec<Track>,
+    pub audio_container: AudioContainer,
 
     packs: Vec<Vec<PackedTrack>>,
 }
 
-impl RopusWriter {
-    pub fn new(samplerate: i32, tracks: Vec<Channels>) -> RopusWriter {
-        RopusWriter {
+impl PrawWriter {
+    pub fn new(samplerate: i32, tracks: Vec<Channels>, audio_container: AudioContainer) -> PrawWriter {
+        PrawWriter {
             version: 1,
             samplerate,
             tracks_num: tracks.len() as i32,
@@ -172,6 +196,7 @@ impl RopusWriter {
                 .into_iter()
                 .map(|track| Track { channels: track })
                 .collect(),
+            audio_container,
             packs: Vec::new(),
         }
     }
@@ -208,42 +233,39 @@ impl RopusWriter {
             });
         }
 
+        // Add audio_container
+        header.push(match self.audio_container {
+            AudioContainer::Opus => 0,
+            AudioContainer::Flac => 1,
+        });
+
         // Add packs_num
         header.extend_from_slice(&(self.packs.len() as i32).to_be_bytes());
-
-        // Add pack_seek
-        // TODO: CHANGE
-        let mut pack_seek = 0;
-        for _ in 0..self.packs.len() {
-            header.extend_from_slice(&(pack_seek as i32).to_be_bytes());
-            pack_seek += 4
-                + (4 * self.tracks_num as usize)
-                + self.packs[0]
-                    .iter()
-                    .map(|track| track.data.len())
-                    .sum::<usize>();
-        }
 
         header
     }
 
     pub fn get_packs(&self) -> Vec<u8> {
-        let mut packs = Vec::new();
+        let mut packs: Vec<u8> = Vec::new();
 
         for pack in &self.packs {
+            let mut pack_data: Vec<u8> = Vec::new();
             let opus_pack_len = pack[0].data.len();
 
             for i in 0..opus_pack_len {
                 // Add the size of each track
                 for track in pack {
-                    packs.extend_from_slice(&(track.data.len() as i32).to_be_bytes());
+                    pack_data.extend_from_slice(&(track.data[i].len() as i32).to_be_bytes());
                 }
 
                 // Add the data for each track
                 for track in pack {
-                    packs.extend_from_slice(&track.data[i]);
+                    pack_data.extend_from_slice(&track.data[i]);
                 }
             }
+
+            packs.extend_from_slice(&(pack_data.len() as i32).to_be_bytes());
+            packs.extend_from_slice(&pack_data);
         }
 
         packs
@@ -254,12 +276,10 @@ impl RopusWriter {
 
         let header = self.get_header();
         let header_size = (header.len() as i32).to_be_bytes();
-        let mut len = file.write(&header_size)?;
-        println!("Header size: {}", len);
-        len = file.write(header.as_slice())?;
-        println!("Header: {:?}", len);
-        len = file.write(&self.get_packs())?;
-        println!("Packs: {:?}", len);
+        file.write("praw".as_bytes())?;
+        file.write(&header_size)?;
+        file.write(header.as_slice())?;
+        file.write(&self.get_packs())?;
 
         file.flush()?;
 
@@ -267,7 +287,7 @@ impl RopusWriter {
     }
 }
 
-pub struct RopusFileReader {
+pub struct PrawFileReader {
     /* FOR EASY ACCESS */
     pub version: i32,
 
@@ -276,36 +296,46 @@ pub struct RopusFileReader {
     //pub tracks: Vec<Track>,
     pub packs_num: i32,
     /* FOR EASY ACCESS */
-    pub reader: RopusReader,
+    pub reader: PrawReader,
 
     file: File,
+    starting_pos_packs: u64,
+    past_pack_pos: Vec<u64>,
 }
 
-impl RopusFileReader {
-    pub fn load(path: &str) -> Result<RopusFileReader> {
+impl PrawFileReader {
+    pub fn load(path: &str) -> Result<PrawFileReader> {
         let mut file = File::open(path)?;
+
+        // Get "praw" string (or magic number)
+        let mut magic = [0u8; 4];
+        file.read(&mut magic)?;
+        if magic != "praw".as_bytes() {
+            return Err(anyhow::Error::msg("Invalid file"));
+        }
 
         // Get header size as int
         let mut header_size = [0u8; 4];
         file.read(&mut header_size)?;
-        println!("Header size: {:?}", header_size);
         let header_size = i32::from_be_bytes(header_size);
-        println!("Header size: {}", header_size);
 
         // Get header as Vec<u8>
         let mut header = vec![0u8; header_size as usize];
         file.read(&mut header)?;
 
-        let ropus_reader = RopusReader::load(header)?;
+        let praw_reader = PrawReader::load(header)?;
+        let packs_num = praw_reader.packs_num;
 
-        Ok(RopusFileReader {
-            version: ropus_reader.version,
-            samplerate: ropus_reader.samplerate,
-            tracks_num: ropus_reader.tracks_num,
-            //tracks: ropus_reader.tracks,
-            packs_num: ropus_reader.packs_num,
-            reader: ropus_reader,
+        Ok(PrawFileReader {
+            version: praw_reader.version,
+            samplerate: praw_reader.samplerate,
+            tracks_num: praw_reader.tracks_num,
+            //tracks: praw_reader.tracks,
+            packs_num: praw_reader.packs_num,
+            reader: praw_reader,
             file,
+            starting_pos_packs: (header_size + 4) as u64,
+            past_pack_pos: vec![0; packs_num as usize],
         })
         // Get version as int
         // let mut version = [0u8; 4];
@@ -342,16 +372,7 @@ impl RopusFileReader {
         // file.read(&mut packs_num)?;
         // let packs_num = i32::from_be_bytes(packs_num);
 
-        // // Get pack_seek
-        // let mut pack_seek = Vec::new();
-        // for _ in 0..packs_num {
-        //     let mut pack = [0u8; 4];
-        //     file.read(&mut pack)?;
-        //     let pack = i32::from_be_bytes(pack);
-        //     pack_seek.push(pack);
-        // }
-
-        // Ok(RopusFileReader {
+        // Ok(PrawFileReader {
         //     version,
         //     samplerate,
         //     tracks_num,
@@ -364,9 +385,11 @@ impl RopusFileReader {
     }
 
     pub fn read_pack(&mut self) -> Vec<PackedTrack> {
-        // Seek to the current pack
-        let pack_pos = self.reader.pack_seek[self.reader.current_pack as usize] as u64;
-        self.file.seek(SeekFrom::Start(pack_pos)).unwrap();
+        // Add pack to past_pack_pos
+        let current_pack = self.reader.current_pack as usize;
+        if self.past_pack_pos[current_pack] == 0  {
+            self.past_pack_pos[current_pack] = self.file.stream_position().unwrap() as u64;
+        }
 
         // Get the size of the pack
         let mut pack_size = [0u8; 4];
@@ -381,4 +404,4 @@ impl RopusFileReader {
     }
 }
 
-// pub struct RopusFileWriter
+// pub struct PrawFileWriter
