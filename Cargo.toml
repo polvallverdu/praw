@@ -34,9 +34,17 @@ opus = ["dep:opus", "dep:sndfile"]
 flac = ["dep:libflac-sys", "dep:claxon", "dep:sndfile"]
 
 [[example]]
-name = "opus"
-path = "./examples/example_opus.rs"
+name = "opus_encode"
+path = "./examples/example_opus_encode.rs"
 
 [[example]]
-name = "flac"
-path = "./examples/example_flac.rs"
+name = "flac_encode"
+path = "./examples/example_flac_encode.rs"
+
+[[example]]
+name = "opus_decode"
+path = "./examples/example_opus_decode.rs"
+
+[[example]]
+name = "flac_decode"
+path = "./examples/example_flac_decode.rs"
