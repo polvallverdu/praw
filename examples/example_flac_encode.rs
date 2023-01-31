@@ -2,7 +2,6 @@ use libflac_sys::*;
 use sndfile::SndFileIO;
 use std::os::raw::c_void;
 
-extern crate claxon;
 extern crate libflac_sys;
 extern crate praw;
 extern crate sndfile;

@@ -15,7 +15,6 @@ opus = { version = "0.3.0", optional = true }
 libflac-sys = { version = "0.3.0", default_features = false, features = [
   "build-flac",
 ], optional = true }
-claxon = { version = "0.4.3", optional = true }
 # TODO: Make tokio feature
 tokio = { version = "1.24.1", features = ["fs"], optional = true }
 
@@ -25,13 +24,12 @@ opus = { version = "0.3.0" }
 libflac-sys = { version = "0.3.0", default_features = false, features = [
   "build-flac",
 ] }
-claxon = { version = "0.4.3" }
 tokio = { version = "1.24.1", features = ["fs"] }
 
 [feature]
 tokio = ["dep:tokio"]
 opus = ["dep:opus", "dep:sndfile"]
-flac = ["dep:libflac-sys", "dep:claxon", "dep:sndfile"]
+flac = ["dep:libflac-sys", "dep:sndfile"]
 
 [[example]]
 name = "opus_encode"
