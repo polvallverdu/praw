@@ -3,7 +3,7 @@
 use anyhow::Result;
 use std::{
     fs::File,
-    io::{Read, Seek, SeekFrom, Write},
+    io::{Read, Seek, Write, SeekFrom},
 };
 
 pub enum Channels {
@@ -59,8 +59,6 @@ pub struct PrawReader {
     pub audio_container: AudioContainer,
 
     pub packs_num: i32,
-
-    pub current_pack: i32,
 }
 
 impl PrawReader {
@@ -89,7 +87,7 @@ impl PrawReader {
         // Get tracks channel (0 = mono, 1 = stereo) as Vec<Track>. Note that each u8 is a track indicating a channel (0 for mono, 1 for stereo)
         let mut tracks = Vec::new();
         for _ in 0..tracks_num {
-            let mut track = buf[pointer];
+            let track = buf[pointer];
             pointer += 1;
             let track = Track {
                 channels: match track {
@@ -125,7 +123,6 @@ impl PrawReader {
             tracks,
             audio_container,
             packs_num,
-            current_pack: 0,
         })
     }
 
@@ -163,8 +160,6 @@ impl PrawReader {
                 data: track_packets[i].clone(),
             });
         }
-
-        self.current_pack += 1;
 
         packed_tracks
     }
@@ -299,8 +294,8 @@ pub struct PrawFileReader {
     pub reader: PrawReader,
 
     file: File,
-    starting_pos_packs: u64,
     past_pack_pos: Vec<u64>,
+    pub current_pack: i32,
 }
 
 impl PrawFileReader {
@@ -326,6 +321,21 @@ impl PrawFileReader {
         let praw_reader = PrawReader::load(header)?;
         let packs_num = praw_reader.packs_num;
 
+        let mut past_pack_pos = vec![0; packs_num as usize];
+        for i in 0..packs_num as usize {
+            past_pack_pos[i] = file.stream_position().unwrap() as u64;
+
+            // Get the size of the pack
+            let mut pack_size = [0u8; 4];
+            file.read(&mut pack_size).unwrap();
+            let pack_size = i32::from_be_bytes(pack_size);
+
+            // Skip the pack
+            file.seek(SeekFrom::Current(pack_size as i64)).unwrap();
+        }
+        // Go to the first pack
+        file.seek(SeekFrom::Start(past_pack_pos[0])).unwrap();
+
         Ok(PrawFileReader {
             version: praw_reader.version,
             samplerate: praw_reader.samplerate,
@@ -334,62 +344,17 @@ impl PrawFileReader {
             packs_num: praw_reader.packs_num,
             reader: praw_reader,
             file,
-            starting_pos_packs: (header_size + 4) as u64,
-            past_pack_pos: vec![0; packs_num as usize],
+            past_pack_pos: past_pack_pos,
+            current_pack: 0,
         })
-        // Get version as int
-        // let mut version = [0u8; 4];
-        // file.read(&mut version)?;
-        // let version = i32::from_be_bytes(version);
-
-        // // Get samplerate as int
-        // let mut samplerate = [0u8; 4];
-        // file.read(&mut samplerate)?;
-        // let samplerate = i32::from_be_bytes(samplerate);
-
-        // // Get tracks_num as int
-        // let mut tracks_num = [0u8; 4];
-        // file.read(&mut tracks_num)?;
-        // let tracks_num = i32::from_be_bytes(tracks_num);
-
-        // // Get tracks channel (0 = mono, 1 = stereo) as Vec<Track>. Note that each u8 is a track indicating a channel (0 for mono, 1 for stereo)
-        // let mut tracks = Vec::new();
-        // for _ in 0..tracks_num {
-        //     let mut track = [0u8; 1];
-        //     file.read(&mut track)?;
-        //     let track = Track {
-        //         channels: match track[0] {
-        //             0 => Channels::Mono,
-        //             1 => Channels::Stereo,
-        //             _ => panic!("Invalid channel type"),
-        //         },
-        //     };
-        //     tracks.push(track);
-        // }
-
-        // // Get packs_num
-        // let mut packs_num = [0u8; 4];
-        // file.read(&mut packs_num)?;
-        // let packs_num = i32::from_be_bytes(packs_num);
-
-        // Ok(PrawFileReader {
-        //     version,
-        //     samplerate,
-        //     tracks_num,
-        //     tracks,
-        //     packs_num,
-        //     pack_seek,
-        //     file,
-        //     current_pack: 0,
-        // })
     }
 
-    pub fn read_pack(&mut self) -> Vec<PackedTrack> {
-        // Add pack to past_pack_pos
-        let current_pack = self.reader.current_pack as usize;
-        if self.past_pack_pos[current_pack] == 0  {
-            self.past_pack_pos[current_pack] = self.file.stream_position().unwrap() as u64;
+    pub fn read_pack(&mut self) -> Result<Vec<PackedTrack>> {
+        if self.current_pack >= self.packs_num {
+            return Err(anyhow::Error::msg("No more packs"));
         }
+        // Seek to pack
+        self.file.seek(SeekFrom::Start(self.past_pack_pos[self.current_pack as usize])).unwrap();
 
         // Get the size of the pack
         let mut pack_size = [0u8; 4];
@@ -400,8 +365,34 @@ impl PrawFileReader {
         let mut buf = vec![0u8; pack_size as usize];
         self.file.read(&mut buf).unwrap();
 
-        self.reader.read_pack(buf)
+        let pack = self.reader.read_pack(buf);
+        self.current_pack += 1;
+        Ok(pack)
+    }
+
+    pub fn go_to_pack(&mut self, pack: i32) -> Result<()> {
+        if pack < 0 || pack > self.packs_num {
+            return Err(anyhow::Error::msg("Invalid pack number"));
+        }
+
+        let pack_pos = self.past_pack_pos[pack as usize];
+        match self.file.seek(SeekFrom::Start(pack_pos)) {
+            Ok(_) => {
+                self.current_pack = pack;
+                return Ok(());
+            },
+            Err(_) => {
+                return Err(anyhow::Error::msg("Failed to seek to pack"));
+            },
+        };
+    }
+
+    pub fn go_to_second(&mut self, second: i32) -> Result<()> {
+        if second < 0 || second >= self.reader.packs_num*10 {
+            panic!("Second out of range");
+        }
+
+        let pack = (second as f32/10.0).floor() as i32;
+        self.go_to_pack(pack)
     }
 }
-
-// pub struct PrawFileWriter
