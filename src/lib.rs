@@ -396,7 +396,7 @@ impl PrawFileReader {
         Ok(pack)
     }
 
-    pub fn read_raw_pack(&mut self) -> Result<u8> {
+    pub fn read_raw_pack(&mut self) -> Result<Vec<u8>> {
         if self.current_pack >= self.packs_num {
             return Err(anyhow::Error::msg("No more packs"));
         }
@@ -412,7 +412,7 @@ impl PrawFileReader {
         let mut buf = vec![0u8; pack_size as usize];
         self.file.read(&mut buf).unwrap();
 
-        return buf;
+        return Ok(buf);
     }
 
     pub fn go_to_pack(&mut self, pack: i32) -> Result<()> {
