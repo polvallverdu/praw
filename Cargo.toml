@@ -1,6 +1,6 @@
 [package]
 name = "praw"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Pol <"]
 
@@ -28,12 +28,17 @@ tokio = { version = "1.24.1", features = ["fs"] }
 
 [feature]
 tokio = ["dep:tokio"]
-opus = ["dep:opus", "dep:sndfile"]
-flac = ["dep:libflac-sys", "dep:sndfile"]
+encode = ["dep:sndfile"]
+opus = ["dep:opus"]
+flac = ["dep:libflac-sys"]
 
 [[example]]
 name = "opus_encode"
 path = "./examples/example_opus_encode.rs"
+
+[[example]]
+name = "opus_stems_encode"
+path = "./examples/example_stems_encode.rs"
 
 [[example]]
 name = "flac_encode"
