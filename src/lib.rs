@@ -128,31 +128,44 @@ impl PrawReader {
 
     pub fn read_pack(&mut self, buf: Vec<u8>) -> Vec<PackedTrack> {
         let mut packed_tracks = Vec::new();
-        let mut track_packets: Vec<Vec<Vec<u8>>> = vec![Vec::new(); self.tracks_num as usize];
+        let mut track_packets: Vec<Vec<Vec<u8>>> = vec![Vec::with_capacity(0); self.tracks_num as usize];
         let mut pointer = 0;
 
-        while buf.len() != pointer {
-            // Get the size of each track
-            let mut track_sizes = Vec::new();
-            for _ in 0..self.tracks_num {
-                let old_p = pointer;
-                pointer += 4;
-                let num = &buf[old_p..pointer];
-                let track_size = i32::from_be_bytes([num[0], num[1], num[2], num[3]]);
-                track_sizes.push(track_size);
-            }
-
-            // Get the data for each track
-            for i in 0..self.tracks_num as usize {
-                let size = track_sizes[i as usize] as usize;
-
-                let old_p = pointer;
-                pointer += size;
-
-                let data = buf[old_p..pointer].to_vec();
-                track_packets[i].push(data);
-            }
+        // Get the size of each track
+        let mut track_sizes = Vec::new();
+        for _ in 0..self.tracks_num {
+            let old_p = pointer;
+            pointer += 4;
+            let num = &buf[old_p..pointer];
+            let track_size = i32::from_be_bytes([num[0], num[1], num[2], num[3]]);
+            track_sizes.push(track_size);
         }
+
+        // while buf.len() < pointer {
+            
+
+        // Get the data for each track
+        for i in 0..self.tracks_num as usize {
+            let size = track_sizes[i as usize] as usize;
+            let totalsize = pointer + size;
+
+            // let old_p = pointer;
+            // pointer += size;
+
+            let mut minipacks: Vec<Vec<u8>> = Vec::new();
+
+            while totalsize > pointer  {
+                let minipack_size = i32::from_be_bytes([buf[pointer], buf[pointer + 1], buf[pointer + 2], buf[pointer + 3]]) as usize;
+                pointer += 4;
+
+                let old_p = pointer;
+                pointer += minipack_size;
+                let minipack = buf[old_p..pointer].to_vec();
+                minipacks.push(minipack);
+            }
+            track_packets[i] = minipacks;
+        }
+        // }
 
         for i in 0..self.tracks_num as usize {
             packed_tracks.push(PackedTrack {
@@ -243,19 +256,45 @@ impl PrawWriter {
     pub fn get_packs(&self) -> Vec<u8> {
         let mut packs: Vec<u8> = Vec::new();
 
+        // for pack in &self.packs {
+        //     let mut pack_data: Vec<u8> = Vec::new();
+        //     let opus_pack_len = pack[0].data.len();
+
+        //     for i in 0..opus_pack_len {
+        //         // Add the size of each track
+        //         for track in pack {
+        //             pack_data.extend_from_slice(&(track.data[i].len() as i32).to_be_bytes());
+        //         }
+
+        //         // Add the data for each track
+        //         for track in pack {
+        //             pack_data.extend_from_slice(&track.data[i]);
+        //         }
+        //     }
+
+        //     packs.extend_from_slice(&(pack_data.len() as i32).to_be_bytes());
+        //     packs.extend_from_slice(&pack_data);
+        // }
+
         for pack in &self.packs {
             let mut pack_data: Vec<u8> = Vec::new();
-            let opus_pack_len = pack[0].data.len();
 
-            for i in 0..opus_pack_len {
-                // Add the size of each track
-                for track in pack {
-                    pack_data.extend_from_slice(&(track.data[i].len() as i32).to_be_bytes());
+            for track in pack {
+                // sum up all the minipacks data of a track
+                let mut total_len: i32 = 0;
+                for minipack in &track.data {
+                    total_len += 4;
+                    total_len += minipack.len() as i32;
                 }
+                // Add the size of each track
+                pack_data.extend_from_slice(&total_len.to_be_bytes());
+            }
 
+            for track in pack {
                 // Add the data for each track
-                for track in pack {
-                    pack_data.extend_from_slice(&track.data[i]);
+                for minipack in &track.data {
+                    pack_data.extend_from_slice(&(minipack.len() as i32).to_be_bytes());
+                    pack_data.extend_from_slice(&minipack);
                 }
             }
 
