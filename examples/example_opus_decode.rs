@@ -32,11 +32,12 @@ fn main() {
                     .unwrap();
                 //out.truncate(len*2);
 
+                const THRESHOLD: f32 = 0.9999999;
                 for i in 0..out.len() {
-                    if out[i] > 1.0 {
-                        out[i] = 1.0;
-                    } else if out[i] < -1.0 {
-                        out[i] = -1.0;
+                    if out[i] >= THRESHOLD {
+                        out[i] = THRESHOLD;
+                    } else if out[i] <= -THRESHOLD {
+                        out[i] = -THRESHOLD;
                     }
                 }
 
